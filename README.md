@@ -22,10 +22,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 4. Set required environment variables
-#    Copy the example and fill in your keys
-cp .env.example .env
-# Then edit .env — at minimum, set NEBIUS_API_KEY.
-# GITHUB_TOKEN is optional but recommended (raises rate limit from 60 to 5000 req/hour).
+#    At minimum, export NEBIUS_API_KEY in your shell.
+#    GITHUB_TOKEN is optional but recommended (raises rate limit from 60 to 5000 req/hour).
+export NEBIUS_API_KEY=your_nebius_key_here
+# export GITHUB_TOKEN=your_github_pat_here
 
 # 5. Start the server
 uvicorn src.main:app --host 0.0.0.0 --port 8000

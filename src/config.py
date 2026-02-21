@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     nebius_api_key: str
     github_token: str = ""  # optional — unauthenticated GitHub API has 60 req/hour limit
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    model_config = {"extra": "ignore"}
 
 
 # Singleton — loaded once at import time; crashes if vars are missing
