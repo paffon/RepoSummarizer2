@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv:*)",
+      "Bash(.venv/Scripts/pip install:*)"
+    ]
+  }
+}

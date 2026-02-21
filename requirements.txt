@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+openai
+aiofiles
+aiosqlite
+pytest
+pytest-asyncio
+asgi-lifespan
+requests
+aiohttp
