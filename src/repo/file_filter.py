@@ -9,7 +9,7 @@ from src import config
 # Blocklist — patterns matched against full file path
 # ---------------------------------------------------------------------------
 
-_SKIP_PATTERNS: list[re.Pattern] = [re.compile(p) for p in [
+_SKIP_PATTERNS: list[re.Pattern[str]] = [re.compile(p) for p in [
     r"node_modules/", r"vendor/", r"\.git/", r"__pycache__/", r"\.venv/", r"venv/",
     r"\.idea/", r"\.vscode/", r"dist/", r"build/", r"target/", r"\.next/", r"out/",
     r"\.lock$", r"package-lock\.json$", r"yarn\.lock$", r"poetry\.lock$", r"go\.sum$",
@@ -165,7 +165,7 @@ def normalize_content(content: str, ext: str = "") -> str:
         if _LICENSE_LINE_RE.search(stripped):
             header_end = i + 1
             in_block = True
-        elif in_block and stripped in {"*/", "*/", "#", "*"}:
+        elif in_block and stripped in {"*/", "#", "*"}:
             header_end = i + 1
         elif in_block:
             break

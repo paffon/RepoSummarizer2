@@ -37,9 +37,10 @@ async def close_cache() -> None:
 
 
 async def get_cached(repo: str, sha: str) -> dict[str, Any] | None:
-    if _db is None or sha == "unknown":
+    db = _db
+    if db is None or sha == "unknown":
         return None
-    async with _db.execute(
+    async with db.execute(
         "SELECT summary_json FROM summaries WHERE repo = ? AND sha = ?",
         (repo, sha),
     ) as cursor:
@@ -51,11 +52,12 @@ async def get_cached(repo: str, sha: str) -> dict[str, Any] | None:
 
 
 async def set_cached(repo: str, sha: str, summary: dict[str, Any]) -> None:
-    if _db is None or sha == "unknown":
+    db = _db
+    if db is None or sha == "unknown":
         return
-    await _db.execute(
+    await db.execute(
         "INSERT OR REPLACE INTO summaries (repo, sha, summary_json) VALUES (?, ?, ?)",
         (repo, sha, json.dumps(summary)),
     )
-    await _db.commit()
+    await db.commit()
     logger.info(f"Cache write: {repo}@{sha[:7]}")

@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from src import config, cache
 import src.prompts_service as prompts
@@ -54,7 +56,9 @@ app = FastAPI(title="RepoSummarizer2", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 
 @app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
+async def request_id_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     req_id = uuid.uuid4().hex[:8]
     request.state.req_id = req_id
     response = await call_next(request)
@@ -88,6 +92,18 @@ async def handle_private(request: Request, exc: RepoPrivate):
     return _error(404, "Repository not found or is private.")
 
 
+@app.exception_handler(EmptyRepo)
+async def handle_empty_repo(request: Request, exc: EmptyRepo):
+    return JSONResponse(
+        status_code=200,
+        content=SummarizeResponse(
+            summary="No source files found.",
+            technologies=[],
+            structure="Empty repository.",
+        ).model_dump(),
+    )
+
+
 @app.exception_handler(RateLimited)
 async def handle_rate_limit(request: Request, exc: RateLimited):
     return _error(429, "GitHub API rate limit exceeded. Please try again later.")
@@ -114,7 +130,7 @@ _FILE_BUDGET_CHARS = (
 )
 
 
-def _build_degraded_response(metadata: dict) -> SummarizeResponse:
+def _build_degraded_response(metadata: dict[str, Any]) -> SummarizeResponse:
     lang = metadata.get("language") or "unknown"
     desc = metadata.get("description") or f"A {lang} project."
     topics = metadata.get("topics", [])
@@ -130,7 +146,7 @@ def _build_degraded_response(metadata: dict) -> SummarizeResponse:
     )
 
 
-def _parse_llm_json(raw: str, metadata: dict) -> SummarizeResponse | None:
+def _parse_llm_json(raw: str, metadata: dict[str, Any]) -> SummarizeResponse | None:
     """Parse LLM JSON output into SummarizeResponse. Returns None on failure."""
     try:
         data = json.loads(raw)
@@ -143,7 +159,7 @@ def _parse_llm_json(raw: str, metadata: dict) -> SummarizeResponse | None:
         return None
 
 
-async def _single_pass(context: str, req_id: str, metadata: dict) -> SummarizeResponse:
+async def _single_pass(context: str, req_id: str, metadata: dict[str, Any]) -> SummarizeResponse:
     """Call DeepSeek V3 once; retry with repair prompt on JSON failure."""
     worker = NebiusDeepSeekV3Client()
     try:
@@ -184,7 +200,7 @@ async def _single_pass(context: str, req_id: str, metadata: dict) -> SummarizeRe
 
 async def _map_reduce(
     file_contents: dict[str, str],
-    metadata: dict,
+    metadata: dict[str, Any],
     req_id: str,
 ) -> SummarizeResponse:
     """Two-pass map/reduce for large repos."""
@@ -285,11 +301,7 @@ async def summarize(
         logger.info(f"[{req_id}] tree_entries={len(tree)}")
 
         if not tree:
-            return SummarizeResponse(
-                summary="This repository appears to be empty.",
-                technologies=[],
-                structure="Empty repository.",
-            )
+            raise EmptyRepo()
 
         scored = filter_and_score(tree)
         if not scored:

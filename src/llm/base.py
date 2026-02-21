@@ -11,3 +11,7 @@ class BaseLLMClient(ABC):
     @abstractmethod
     async def complete(self, messages: list[ChatCompletionMessageParam]) -> str:
         ...
+
+    @abstractmethod
+    async def close(self) -> None:
+        ...
