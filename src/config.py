@@ -26,4 +26,4 @@ class Settings(BaseSettings):
 
 
 # Singleton — loaded once at import time; crashes if vars are missing
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

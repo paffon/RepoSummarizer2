@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from src import config, cache
 import src.prompts_service as prompts
+from openai.types.chat import ChatCompletionMessageParam
 from src.llm.base import LLMError
 from src.llm.deepseek_v3 import NebiusDeepSeekV3Client
 from src.llm.llama_8b import NebiusLlama8BClient
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from src.config import settings  # noqa: F401 — crashes here if env vars missing
+    # Settings singleton (src.config.settings) already validated at import time.
     await cache.init_cache()
     logger.info("RepoSummarizer2 starting up")
     yield
@@ -163,7 +164,7 @@ async def _single_pass(context: str, req_id: str, metadata: dict[str, Any]) -> S
     """Call DeepSeek V3 once; retry with repair prompt on JSON failure."""
     worker = NebiusDeepSeekV3Client()
     try:
-        messages = [
+        messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompts.SUMMARIZE_SYSTEM},
             {"role": "user", "content": prompts.summarize_user(context)},
         ]
@@ -179,7 +180,7 @@ async def _single_pass(context: str, req_id: str, metadata: dict[str, Any]) -> S
 
         # Repair attempt
         logger.warning(f"[{req_id}] JSON parse failed — attempting repair")
-        repair_msgs = [
+        repair_msgs: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompts.JSON_REPAIR_SYSTEM},
             {"role": "user", "content": prompts.json_repair_user(raw, "Failed to parse JSON")},
         ]
@@ -209,7 +210,7 @@ async def _map_reduce(
 
     async def map_one(path: str, content: str) -> str:
         chunk = content[: config.MAX_CHARS_PER_FILE]
-        msgs = [
+        msgs: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompts.MAP_SYSTEM},
             {"role": "user", "content": prompts.map_user(chunk)},
         ]
@@ -234,7 +235,7 @@ async def _map_reduce(
             return _build_degraded_response(metadata)
 
         logger.info(f"[{req_id}] reduce phase: {len(notes)} notes")
-        reduce_msgs = [
+        reduce_msgs: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompts.REDUCE_SYSTEM},
             {"role": "user", "content": prompts.reduce_user(notes)},
         ]
@@ -247,7 +248,7 @@ async def _map_reduce(
             return result
 
         # Repair attempt
-        repair_msgs = [
+        repair_msgs: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompts.JSON_REPAIR_SYSTEM},
             {"role": "user", "content": prompts.json_repair_user(raw, "Failed to parse JSON")},
         ]
