@@ -4,88 +4,92 @@
 
 ```text
 RepoSummarizer2/
-├── src/                  # Core application code
-│   ├── main.py              # FastAPI app, route definitions
-│   ├── config.py            # Environment / settings
-│   ├── prompts_service.py   # Message dataclass + all LLM prompts (see below)
+├── src/                       # Core application code
+│   ├── main.py                   # FastAPI app, /summarize endpoint, exception handlers, request ID middleware
+│   ├── config.py                 # pydantic-settings — crashes on startup if NEBIUS_API_KEY or GITHUB_TOKEN missing
+│   ├── models.py                 # Pydantic schemas: SummarizeRequest, SummarizeResponse, ErrorResponse
+│   ├── prompts_service.py        # Module-level system prompt constants + user message builder functions
 │   ├── repo/
-│   │   └── github_api.py    # GitHub API client & file-tree logic
+│   │   ├── github_api.py         # Async GitHub client: metadata, tree, file fetching, domain exceptions
+│   │   └── file_filter.py        # Scoring function, blocklist, content normalization, token budgeting
 │   └── llm/
-│       ├── base.py          # Abstract LLM base class
-│       ├── deepseek_v3.py   # Worker model (single-pass / reduce)
-│       └── llama_8b.py      # Planner model (map chunks)
-├── tests/                # Automated test suite
-└── runners/              # Interactive developer runners (see below)
+│       ├── base.py               # BaseLLMClient abstract class + LLMError exception
+│       ├── deepseek_v3.py        # Worker model (single-pass + reduce)
+│       └── llama_8b.py           # Planner model (map chunks)
+├── tests/                     # Automated test suite
+└── runners/                   # Interactive developer scripts — not part of the app, never imported
+    ├── github_runner.py          # Explore raw GitHub API responses
+    └── llm_runner.py             # Test LLM prompts interactively
 ```
 
-## Prompts Service
+## Prompts Service (`src/prompts_service.py`)
 
-All LLM message construction lives in `src/prompts_service.py`. Nothing else in the codebase contains raw prompt strings.
+All LLM message content lives here. Nothing else in the codebase contains raw prompt strings.
 
-### `Message` dataclass
+The module uses plain module-level constants and functions — no class wrapper, no instantiation.
 
-```python
-Message(role: str, content: str)
-```
+### System prompt constants
 
-Wraps a single chat turn. `.to_dict()` returns the `{"role": ..., "content": ...}` dict expected by the OpenAI-compatible SDK.
-
-### `PromptsService` — class attributes (system prompts)
-
-| Attribute | Used by | Purpose |
+| Name | Used by | Purpose |
 | --- | --- | --- |
 | `SUMMARIZE_SYSTEM` | DeepSeek V3, single-pass | Instructs the model to return `{"summary", "technologies", "structure"}` JSON |
 | `MAP_SYSTEM` | Llama 8B, map phase | Extracts `{"purpose", "technologies", "structure"}` notes from one chunk |
 | `REDUCE_SYSTEM` | DeepSeek V3, reduce phase | Merges all map notes into the final three-key JSON |
 | `JSON_REPAIR_SYSTEM` | Either model, retry | Fixes malformed JSON while preserving content |
 
-### `PromptsService` — static methods (user messages)
+### User message builder functions
 
-| Method | Arguments | Purpose |
+| Function | Arguments | Returns |
 | --- | --- | --- |
-| `summarize_user` | `repo_context: str` | Wraps the assembled repo context for the single-pass call |
-| `map_user` | `chunk: str` | Wraps one code chunk for the map phase |
-| `reduce_user` | `notes: list[str]` | Formats the collected map notes for the reduce call |
-| `json_repair_user` | `bad_json: str, error: str` | Provides the broken output and parse error for the repair retry |
+| `summarize_user` | `repo_context: str` | User message string for the single-pass call |
+| `map_user` | `chunk: str` | User message string for one map-phase file |
+| `reduce_user` | `notes: list[str]` | User message string for the reduce call |
+| `json_repair_user` | `bad_json: str, error: str` | User message string for the repair retry |
 
 ### Usage pattern
 
 ```python
+import src.prompts_service as prompts
+
 messages = [
-    Message("system", PromptsService.SUMMARIZE_SYSTEM),
-    Message("user", PromptsService.summarize_user(repo_context)),
+    {"role": "system", "content": prompts.SUMMARIZE_SYSTEM},
+    {"role": "user",   "content": prompts.summarize_user(repo_context)},
 ]
 ```
 
+## Domain Exceptions (`src/repo/github_api.py`)
+
+Use distinct exception types for distinct failure modes — do not reuse one class for structurally different cases:
+
+| Exception | Raised when | HTTP response |
+| --- | --- | --- |
+| `InvalidGitHubURL` | URL fails regex validation | 422 |
+| `RepoNotFound` | GitHub returns 404 | 404 |
+| `RepoPrivate` | GitHub 200 + `private: true` | 404 (message only, no metadata leak) |
+| `RateLimited` | GitHub 403 + rate-limit header | 429 |
+| `LLMError` | LLM call fails after retries | 502 |
+
+## Chunk Definition (map phase)
+
+A **chunk** is one fetched file's normalized, capped content. Each file that passes filtering and is fetched becomes exactly one chunk — no further splitting of individual files. The per-file 10,000-char cap ensures every chunk fits within the Planner model's context window.
+
+## Large Repo Threshold
+
+A repo is **large** when the assembled context token estimate exceeds **50,000 tokens** after filtering, normalizing, and applying the per-file cap. Below this: single-pass (DeepSeek V3 only). At or above: two-pass map/reduce.
+
 ## Caching
 
-- **Write always:** every successfully processed repo is stored in SQLite, keyed by `(owner/repo, commit_sha)`.  A new commit SHA produces a new row via `INSERT OR REPLACE`, effectively overriding the old entry.
-- **Read is opt-in:** a boolean flag (`use_cache`, default `True`) controls whether the cache lookup happens before the full pipeline runs.  Setting it to `False` forces a fresh LLM call even when a cached result exists, which is useful during development and testing.
+- **Write always:** every successfully processed repo is stored in SQLite, keyed by `(owner/repo, commit_sha)`. A new commit SHA produces a new row via `INSERT OR REPLACE`, overriding the old entry. Degraded responses (built from metadata only) are **not** cached.
+- **Cache bypass:** expose as an optional query parameter `?bypass_cache=true` on `POST /summarize`. Default: cache is used. This keeps the request body contract (`{"github_url": "..."}`) clean.
 
 ## Runners
 
-Runners live in `runners/` and are standalone Python scripts — no server required.  Each one exercises a single core component end-to-end with full console transparency, so the developer can observe every intermediate value without adding debug prints to production code.
+Runners live in `runners/` and are standalone Python scripts — no server required. Each exercises one core component with full console output so the developer can observe every intermediate value without adding debug prints to production code.
 
-### `runners/llm_runner.py` — LLM Interaction Runner
+### `runners/github_runner.py`
 
-Interactive REPL for the LLM layer.
+Accepts `<owner> <repo>` args. Fires the metadata and recursive tree API calls via `httpx`, prints raw JSON responses. Useful for checking what the GitHub API returns before the production client post-processes it.
 
-1. Prompts the developer to choose a model (DeepSeek V3 / Llama 3.1 8B / …).
-2. Accepts free-form user input as the "repo context".
-3. Prints the **exact payload** sent to the API (system prompt, user message, parameters).
-4. Streams or prints the raw API response, then the parsed/structured result.
-5. Loops — the developer can change the model mid-session or send multiple prompts.
+### `runners/llm_runner.py`
 
-### `runners/github_runner.py` — GitHub API Interaction Runner
-
-Interactive explorer for the GitHub data-collection layer.
-
-1. Accepts a GitHub URL (full `https://github.com/owner/repo`) **or** a `owner/repo` shorthand.
-2. Prints each HTTP request as it fires (method, URL, headers minus secrets).
-3. Displays raw API responses before post-processing.
-4. Shows the filtered & scored file tree that would be handed to the LLM.
-5. Optionally fetches and displays selected file contents with truncation markers.
-
-### Adding More Runners
-
-Each new core component (`cache`, `file_filter`, `token_budget`, …) should get its own runner following the same pattern: prompt for inputs → print all intermediate state → show final output.
+Interactive REPL: choose a model, paste repo context, see the exact payload sent, the raw API response, and the parsed result. Loops so the developer can test multiple prompts or switch models mid-session.

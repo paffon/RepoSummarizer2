@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python -m venv:*)",
-      "Bash(.venv/Scripts/pip install:*)"
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(pip install:*)",
+      "Bash(python -c:*)"
     ]
   }
 }

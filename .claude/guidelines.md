@@ -7,18 +7,24 @@ A single source of truth for design decisions, architecture, constraints, and ed
 Separate concerns into distinct modules from day one. This makes the code testable, maintainable, and easy to extend.
 
 ```
-app/
-  main.py            # FastAPI app + endpoint + exception handlers
-  github_client.py   # Fetching repo metadata, tree, and file contents
-  repo_processor.py  # Filtering, prioritizing, token budgeting
-  prompt_engineer.py # Prompt construction
-  llm_client.py      # LLM API call + structured output parsing
-  models.py          # Pydantic request/response schemas
-config/
-  settings.py        # Pydantic Settings — crash on startup if keys missing
+src/
+  main.py              # FastAPI app, /summarize endpoint, exception handlers, request ID middleware
+  config.py            # pydantic-settings — crash on startup if NEBIUS_API_KEY or GITHUB_TOKEN missing
+  models.py            # Pydantic schemas: SummarizeRequest, SummarizeResponse, ErrorResponse
+  prompts_service.py   # Module-level constants (system prompts) + functions (user message builders)
+  repo/
+    github_api.py      # Async GitHub client: metadata, tree, file fetching, domain exceptions
+    file_filter.py     # Scoring function, blocklist, content normalization, token budgeting
+  llm/
+    base.py            # BaseLLMClient abstract class + LLMError exception
+    deepseek_v3.py     # Worker model (single-pass + reduce)
+    llama_8b.py        # Planner model (map chunks)
+runners/
+  github_runner.py     # Dev script: explore GitHub API responses interactively
+  llm_runner.py        # Dev script: test LLM prompts interactively
 ```
 
-Use **FastAPI** (async, Pydantic v2, auto OpenAPI docs). Abstract the LLM client so switching providers is a one-line change. Use **pydantic-settings** to load env vars; if `NEBIUS_API_KEY` is missing, the application should raise a clear error at startup — not at the first user request.
+Use **FastAPI** (async, Pydantic v2, auto OpenAPI docs). Abstract the LLM client so switching providers is a one-line change. Use **pydantic-settings** to load env vars; if `NEBIUS_API_KEY` or `GITHUB_TOKEN` is missing, the application should raise a clear error at startup — not at the first user request.
 
 Use **`httpx`** (async) for all HTTP I/O. This application is entirely I/O-bound; blocking with `requests` will strangle throughput.
 
@@ -108,14 +114,14 @@ Design a **scoring function**, not a pile of if-statements. This is what the eva
 
 ### Priority tiers
 
-| Tier | Files | Action |
-| - | - | - |
-| 1 — Always include | `README*`, `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `requirements.txt`, `go.sum` (headers only), `pom.xml`, `build.gradle`, `build.gradle.kts`, `CMakeLists.txt`, `Gemfile`, `pubspec.yaml`, `mix.exs`, `*.csproj`, `*.sln` (headers only) | Full content |
-| 2 — Include if budget allows | Entry points by language — Python: `main.py`, `app.py`, `wsgi.py`, `asgi.py`, `manage.py`; Go: `main.go`, `app.go`, `cmd/main.go`; JS/TS: `index.js`, `index.ts`, `main.js`, `main.ts`, `server.js`, `server.ts`, `app.js`, `app.ts`; Java: `Main.java`, `Application.java`, `App.java`; C#: `Program.cs`, `Startup.cs`; C/C++: `main.c`, `main.cpp`, `main.cc`; Rust: `src/main.rs`, `src/lib.rs`; Ruby: `app.rb`, `config.ru`; PHP: `index.php`; Swift: `main.swift`; Kotlin: `Main.kt`, `Application.kt`; Dart: `main.dart`; Build/deploy: `Dockerfile`, `docker-compose.yml`, `Makefile`, `.env.example` | Full content |
-| 3 — Summaries only | Other source files in `src/` or top-level packages | First N lines or function/class signatures only |
-| 4 — Skip entirely | Everything else (see blocklist below) | Not fetched |
+| Tier | Score | Files | Action |
+| - | - | - | - |
+| 1 — Always include | 100 | `README*`, `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `requirements.txt`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `CMakeLists.txt`, `Gemfile`, `pubspec.yaml`, `mix.exs`, `*.csproj`, `*.sln` | Full content (up to per-file char cap) |
+| 2 — Include if budget allows | 80 | Entry points by language — Python: `main.py`, `app.py`, `wsgi.py`, `asgi.py`, `manage.py`; Go: `main.go`, `app.go`, `cmd/main.go`; JS/TS: `index.js`, `index.ts`, `main.js`, `main.ts`, `server.js`, `server.ts`, `app.js`, `app.ts`; Java: `Main.java`, `Application.java`, `App.java`; C#: `Program.cs`, `Startup.cs`; C/C++: `main.c`, `main.cpp`, `main.cc`; Rust: `src/main.rs`, `src/lib.rs`; Ruby: `app.rb`, `config.ru`; PHP: `index.php`; Swift: `main.swift`; Kotlin: `Main.kt`, `Application.kt`; Dart: `main.dart`; Build/deploy: `Dockerfile`, `docker-compose.yml`, `Makefile`, `.env.example` | Full content |
+| 3 — Include if budget allows | 50 | Other source files in `src/` or top-level packages | First N lines or function/class signatures only |
+| 4 — Skip entirely | — | Everything else: tests, docs, assets, generated files (see blocklist) | Never fetched |
 
-**Suggested weights for scoring:** README* → 100, root config/manifest → 80, core source → 50, tests/docs → 20.
+Note: `go.sum` is a lockfile (cryptographic hashes only, no human-readable intent) — it is caught by the `.lock$` blocklist pattern and skipped. Use `go.mod` for Go dependency intent.
 
 ### Blocklist (deny by pattern, not extension alone)
 
@@ -171,9 +177,15 @@ The normalization pass is cheap (pure string ops) and typically reduces file siz
 
 **Do not guess — measure.** Use `tiktoken` or a conservative character-based estimator (1 token ≈ 4 chars) to track context before building the prompt.
 
-Set a **hard ceiling** (e.g., 80% of the model's context window). Fill greedily tier by tier (Tier 1 → 2 → 3 → 4). **Within each tier, sort files shortest to longest** — this maximises the number of distinct files included before the budget is exhausted. When a file doesn't fully fit, truncate from the **bottom** (not the top) — the most important information is usually at the start.
+Set a **hard ceiling** (e.g., 80% of the model's context window). Fill greedily by priority: **sort files by score descending, then by size ascending within the same score** — this puts the most important files first and, among equal-priority files, maximises the number of distinct files included before the budget is exhausted. When a file doesn't fully fit, truncate from the **bottom** (not the top) — the most important information is usually at the start.
 
 Include a note in the prompt or response about what was omitted. This keeps output honest and signals to the evaluator that truncation was intentional.
+
+### Large repo threshold
+
+A repo is considered **large** when the token estimate of the assembled context (after filtering, normalizing, and applying the per-file char cap) exceeds **50,000 tokens**. Below this threshold, use the single-pass strategy (DeepSeek V3 only). At or above it, use the two-pass map/reduce strategy.
+
+The 50,000-token figure is approximately half the DeepSeek V3 context window, leaving comfortable headroom for system prompts and output. Adjust via config if needed.
 
 ### Multi-stage fallback for large repos
 
@@ -198,8 +210,10 @@ Even a `README.md` can be 100,000 characters. Always apply a per-file character 
 
 ### 2-pass strategy for large repos
 
-- **Pass A (map):** Summarize each chunk (README, manifests, selected modules) into short structured notes.
-- **Pass B (reduce):** Combine notes into the final `summary`, `technologies`, `structure`.
+- **Pass A (map):** Each **chunk** is one fetched file's normalized content. Each file becomes a single map call to the Planner (Llama 8B). All map calls fire concurrently via `asyncio.gather` — wall-clock time is bounded by the slowest single file, not the sum. Each call returns `{"purpose", "technologies", "structure"}` JSON notes.
+- **Pass B (reduce):** The Worker (DeepSeek V3) receives the full list of map notes and combines them into the final `{"summary", "technologies", "structure"}` response.
+
+The per-file 10,000-char cap ensures every chunk fits within the Planner's context window. No further splitting of individual files is required.
 
 This is more stable than stuffing everything into one prompt.
 
@@ -255,8 +269,8 @@ Catalog every failure mode and map each to a specific response. The evaluator wi
 | Failure | Detection | Response |
 | - | - | - |
 | Invalid / non-GitHub URL | Regex validation | 422 with message |
-| Private repo | GitHub 200 + `private: true` flag | 404 with message + metadata (language, description, topics, license) |
-| Non-existent repo | GitHub 404 | 404 with message only |
+| Private repo | GitHub 200 + `private: true` flag | 404 `RepoPrivate` exception — message only (deliberate: no metadata leak) |
+| Non-existent repo | GitHub 404 | 404 `RepoNotFound` exception — message only |
 | GitHub rate limit | GitHub 403 + rate-limit header | 429 with message |
 | Repo too large (truncated tree) | `tree.truncated == true` | Selective subtree expansion (top-level + up to 12 promising subdirs by SHA, depth ≤ 4) |
 | Empty repo (0 files) | Empty tree | 200 with "No content found" summary |
@@ -278,11 +292,11 @@ Use `tenacity` for retry logic. Log all failure modes with a correlation ID.
 
 ## 10. Observability
 
-From day one, even if simple:
+From day one, even if simple. Lives in `src/main.py` as request middleware:
 
-- Generate a **correlation/request ID** per request; include it in logs and as an `X-Request-Id` response header.
+- Generate a **correlation/request ID** per request (e.g., `uuid4().hex[:8]`); include it in logs and as an `X-Request-Id` response header.
 - Log key counters: files scanned, files included, bytes included, token estimate, LLM latency, GitHub fetch latency.
-- Structure logs so they're grep-able.
+- Structure logs so they're grep-able: `[req_id] key=value key=value`.
 
 ## 11. Configuration & Thresholds
 

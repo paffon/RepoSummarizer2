@@ -48,7 +48,7 @@ flowchart TD
     D -- No --> ERR403[Raise AccessDenied<br>private repo]
     C -- 200 --> E[Extract metadata:<br>default_branch, language,<br>description, size, topics,<br>license, fork, private]
     E --> F{private == true?}
-    F -- Yes --> ERR404_2["404 with metadata:<br>Repo not found or private<br>+ returned metadata"]
+    F -- Yes --> ERR404_2[Raise RepoPrivate<br>404 — message only<br>no metadata returned]
     F -- No --> G["GET /repos/{owner}/{repo}/git/<br>trees/{branch}?recursive=1"]
     G --> H{tree.truncated?}
     H -- Yes --> I["GET /repos/{owner}/{repo}/git/trees/{branch}<br>(non-recursive — top level)"]
@@ -85,9 +85,9 @@ flowchart TD
     T2 -- No --> T3{"Source files in<br>src/ or top-level<br>package?"}
     T3 -- Yes --> TIER3[Tier 3 — score 50<br>Signatures or first N lines<br>only]
 
-    T3 -- No --> TIER4[Tier 4 — score 20<br>Skip entirely<br>tests docs assets]
+    T3 -- No --> TIER4[Tier 4 — skip entirely<br>tests docs assets generated]
 
-    TIER1 --> BUDGET[Token budget sort<br>highest score first]
+    TIER1 --> BUDGET[Token budget sort<br>score desc · size asc]
     TIER2 --> BUDGET
     TIER3 --> BUDGET
     BUDGET --> FETCH[Fetch up to 30 files<br>in parallel]
@@ -111,7 +111,7 @@ flowchart TD
     D --> E[Reserve ~3,000 tokens<br>for directory tree]
     E --> F[Reserve ~2,000 tokens<br>for LLM output]
     F --> G[Remaining = file budget]
-    G --> H["Fill files sorted by (tier asc, size asc)<br>— lower tier and shorter files first<br>— stop when budget exhausted<br>— note any omitted files"]
+    G --> H["Fill files sorted by (score desc, size asc)<br>— highest score first; ties broken by shortest file first<br>— stop when budget exhausted<br>— note any omitted files"]
     H --> PROMPT[Build prompt with<br>omission note if needed]
 ```
 
@@ -168,8 +168,8 @@ Cache entries are immortal under the commit SHA key — a given version of a rep
 flowchart TD
     A[Any exception during pipeline] --> B{Exception type}
     B -- InvalidGitHubURL --> E422[422<br>status: error<br>message: Invalid GitHub URL...]
-    B -- RepoNotFound<br>private == true --> PRIV["404 with metadata<br>status: error<br>message: Repo not found or private<br>+ language, description, topics, etc."]
-    B -- RepoNotFound<br>doesn't exist --> E404[404<br>status: error<br>message: Repo not found or private]
+    B -- RepoPrivate --> PRIV[404<br>status: error<br>message: Repo not found or private]
+    B -- RepoNotFound --> E404[404<br>status: error<br>message: Repo not found or private]
     B -- RateLimited --> E429[429<br>status: error<br>message: GitHub rate limit exceeded]
     B -- LLMError after retries --> E502[502<br>status: error<br>message: Upstream LLM failure]
     B -- asyncio.TimeoutError --> E504[504<br>status: error<br>message: Request timed out]
@@ -177,4 +177,4 @@ flowchart TD
     B -- JSONDecodeError after retries --> DEGRADE[200 — degraded<br>Built from GitHub metadata<br>no LLM structured output]
 ```
 
-All errors surface as JSON with `status: "error"` and a human-readable `message`. For private repos, we include the metadata extracted from the initial GitHub API call (language, description, topics, license, etc.) to provide value even when the full summary is unavailable. The only case that silently degrades rather than erroring is a persistent LLM JSON parse failure — returning a partial answer is more useful to the caller than a 502.
+All errors surface as JSON with `status: "error"` and a human-readable `message`. Private repos raise `RepoPrivate` (a distinct exception from `RepoNotFound`) and return a message-only 404 — no metadata is included to avoid confirming the repo exists or leaking its properties. The only case that silently degrades rather than erroring is a persistent LLM JSON parse failure — returning a partial answer is more useful to the caller than a 502.

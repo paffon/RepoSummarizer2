@@ -1,12 +1,11 @@
 fastapi
 uvicorn[standard]
 pydantic
+pydantic-settings
 httpx
 openai
-aiofiles
 aiosqlite
+tenacity
 pytest
 pytest-asyncio
 asgi-lifespan
-requests
-aiohttp
