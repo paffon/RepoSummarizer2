@@ -112,6 +112,7 @@ async def handle_rate_limit(request: Request, exc: RateLimited):
 
 @app.exception_handler(LLMError)
 async def handle_llm_error(request: Request, exc: LLMError):
+    logger.error(f"LLM error: {exc}")
     return _error(502, "Upstream LLM failure. Please try again later.")
 
 

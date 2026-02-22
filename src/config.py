@@ -1,10 +1,10 @@
 from pydantic_settings import BaseSettings
 
 NEBIUS_API_KEY_ENV = "NEBIUS_API_KEY"
-NEBIUS_API_BASE = "https://api.studio.nebius.ai/v1/"
+NEBIUS_API_BASE = "https://api.tokenfactory.nebius.com/v1/"
 
 PLANNER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-WORKER_MODEL = "deepseek-ai/DeepSeek-V3"
+WORKER_MODEL = "deepseek-ai/DeepSeek-V3-0324"
 
 # Tuneable thresholds
 MAX_FILE_SIZE_BYTES = 150 * 1024       # 150 KB
