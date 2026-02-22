@@ -1,6 +1,7 @@
 import asyncio
 import time
 import aiohttp
+import json
 
 BASE_URL = "http://localhost:8000"
 
@@ -9,7 +10,6 @@ URLS = [
     "https://github.com/paffon/RockPaperScissors",
     "https://github.com/torvalds/linux",
 ]
-
 
 async def summarize(session: aiohttp.ClientSession, github_url: str) -> None:
     start = time.monotonic()
@@ -24,7 +24,9 @@ async def summarize(session: aiohttp.ClientSession, github_url: str) -> None:
             print(f"\n---\n")
             print(f"Response received for {github_url}")
             print(f"Status: {response.status}")
-            print(f"Body: {body}")
+            print("Body:\n")
+            print(json.dumps(body, indent=4))
+            print("\n")
             print(f"Time: {elapsed:.1f}s")
             print(f"\n---")
     except aiohttp.ClientError as e:
