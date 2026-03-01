@@ -1,8 +1,6 @@
-# RepoSummarizer2
+# RepoSummarizer
 
 A FastAPI service that takes a GitHub repository URL and returns a structured summary: what the project does, which technologies it uses, and how it is organised.
-
----
 
 ## Quick start
 
@@ -38,18 +36,14 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 
 The server will crash on startup if `NEBIUS_API_KEY` is not set.
 
----
-
 ## Environment variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
+| - | - | - |
 | `NEBIUS_API_KEY` | **Yes** | Nebius Token Factory API key |
 | `GITHUB_TOKEN` | No | GitHub Personal Access Token (increases rate limit) |
 
 Variables are loaded from a `.env` file in the project root, or from the shell environment.
-
----
 
 ## Example request
 
@@ -77,7 +71,10 @@ curl -X POST "http://localhost:8000/summarize?bypass_cache=true" \
   -d '{"github_url": "https://github.com/psf/requests"}'
 ```
 
----
+## For examiners
+
+- Concise implementation notes: [docs/submission_notes.md](docs/submission_notes.md)
+- End-to-end request/LLM/error flow diagrams: [docs/flow.md](docs/flow.md)
 
 ## Architecture & design decisions
 
@@ -95,7 +92,7 @@ curl -X POST "http://localhost:8000/summarize?bypass_cache=true" \
 Files are assigned a priority score (0, 50, 80, or 100) and selected greedily within a character budget:
 
 | Tier | Score | Examples |
-|------|-------|---------|
+| - | - | - |
 | 1 | 100 | `README.md`, `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml` |
 | 2 | 80 | Entry points: `main.py`, `app.py`, `index.ts`, `Dockerfile` |
 | 3 | 50 | Other source files in `src/`, `lib/`, top-level packages |
@@ -122,12 +119,10 @@ Summaries are cached in SQLite keyed by `(owner/repo, commit SHA)`. A cache hit 
 - Rate limiting per IP
 - Webhook support: pre-warm cache when GitHub push events arrive
 
----
-
 ## Sample repos
 
 | Repo | Size | Language | Notes |
-|------|------|----------|-------|
+| - | - | - | - |
 | `psf/requests` | Small | Python | Clean structure, README-heavy |
 | `fastapi/fastapi` | Medium | Python | Multiple sub-packages |
 | `torvalds/linux` | Huge | C | Triggers map/reduce; first call is slow |
