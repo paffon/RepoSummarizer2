@@ -6,11 +6,11 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
-from src import config, cache
+from src import config
 import src.prompts_service as prompts
 from openai.types.chat import ChatCompletionMessageParam
 from src.llm.base import LLMError
@@ -42,11 +42,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Settings singleton (src.config.settings) already validated at import time.
-    await cache.init_cache()
     logger.info("RepoSummarizer2 starting up")
     yield
-    await cache.close_cache()
     logger.info("RepoSummarizer2 shutting down")
 
 
@@ -288,28 +285,17 @@ async def _map_reduce(
 async def summarize(
     request: Request,
     body: SummarizeRequest,
-    bypass_cache: bool = Query(default=False),
 ):
     req_id = request.state.req_id
-    logger.info(f"[{req_id}] url={body.github_url} bypass_cache={bypass_cache}")
+    logger.info(f"[{req_id}] url={body.github_url}")
 
     owner, repo_name = parse_github_url(body.github_url)
 
     async with GitHubClient() as gh:
-        # Always fetch metadata first (cheap; also gives us the commit SHA for cache)
         metadata = await gh.fetch_metadata(owner, repo_name)
-        full_name = metadata["full_name"]
-        sha = metadata["commit_sha"]
         logger.info(
-            f"[{req_id}] repo={full_name} sha={sha[:7]} lang={metadata['language']}"
+            f"[{req_id}] repo={metadata['full_name']} sha={metadata['commit_sha'][:7]} lang={metadata['language']}"
         )
-
-        # Cache check — short-circuit the expensive operations
-        if not bypass_cache:
-            cached = await cache.get_cached(full_name, sha)
-            if cached:
-                logger.info(f"[{req_id}] cache hit — returning immediately")
-                return SummarizeResponse(**cached)
 
         tree = await gh.fetch_tree(owner, repo_name, metadata["default_branch"])
         logger.info(f"[{req_id}] tree_entries={len(tree)}")
@@ -339,9 +325,5 @@ async def summarize(
         result = await _single_pass(context, req_id, metadata)
     else:
         result = await _map_reduce(file_contents, metadata, req_id)
-
-    # Write to cache only for non-degraded responses
-    if "(built from metadata)" not in result.summary:
-        await cache.set_cached(full_name, sha, result.model_dump())
 
     return result

@@ -12,10 +12,7 @@ flowchart TD
     C --> D{Repo exists<br>& is public?}
     D -- No --> ERR404[404 Not Found]
     D -- Rate limited / access denied --> ERR429[429 Too Many Requests]
-    D -- Yes --> E[Check cache<br>repo + commit SHA]
-    E --> F{Cache hit?}
-    F -- Yes --> CACHED([Return cached summary])
-    F -- No --> G[Fetch file tree<br>recursive=1]
+    D -- Yes --> G[Fetch file tree<br>recursive=1]
     G --> H{Tree truncated?}
     H -- Yes --> I[Selective subtree expansion:<br>top-level + promising subdirs<br>by SHA, max 12 dirs]
     H -- No --> J[Filter & score files]
@@ -30,10 +27,10 @@ flowchart TD
     P -- No, retry --> Q[Repair prompt<br>retry once]
     Q --> R{Valid JSON<br>this time?}
     R -- No --> DEGRADE[Degrade gracefully<br>from metadata]
-    R -- Yes --> S[Store in cache<br>by repo + SHA]
-    P -- Yes --> S
+    R -- Yes --> RESP
+    P -- Yes --> RESP
     DEGRADE --> RESP
-    S --> RESP([200 OK<br>summary + technologies + structure])
+    RESP([200 OK<br>summary + technologies + structure])
 ```
 
 ## 2. GitHub Data Collection
@@ -140,20 +137,10 @@ Notes:
 - In map/reduce mode, `LLMError` is caught and degraded to metadata response (200), not surfaced as 502.
 - In single-pass mode, upstream LLM failure maps to 502.
 
-## 6. Caching
+## 6. No-cache runtime mode
 
-```mermaid
-flowchart TD
-    A[Request github_url] --> B[Fetch metadata + commit SHA]
-    B --> C{SQLite cache key: repo + SHA}
-    C -- Hit --> D[Return cached summary]
-    C -- Miss --> E[Run pipeline]
-    E --> F{Degraded metadata response?}
-    F -- No --> G[Store in cache]
-    F -- Yes --> H[Skip cache write]
-    G --> I[Return response]
-    H --> I
-```
+For submission simplicity and deterministic behavior during evaluation, this version runs without persistent caching.
+Each request executes the same fetch/filter/summarize pipeline end-to-end.
 
 ## 7. Errors & Response Shape
 

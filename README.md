@@ -1,4 +1,4 @@
-# RepoSummarizer
+# RepoSummarizer2
 
 A FastAPI service that takes a GitHub repository URL and returns a structured summary: what the project does, which technologies it uses, and how it is organised.
 
@@ -36,6 +36,38 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 
 The server will crash on startup if `NEBIUS_API_KEY` is not set.
 
+## Examiners: reliable runbook (PowerShell)
+
+Use these exact commands in one PowerShell session to avoid interactive prompt issues:
+
+```powershell
+# from repo root
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# set key for current shell
+$env:NEBIUS_API_KEY="<your_real_nebius_key>"
+
+# optional but recommended
+# $env:GITHUB_TOKEN="<your_github_token>"
+
+# verify key is visible to this shell
+if ($env:NEBIUS_API_KEY) { "NEBIUS_API_KEY=SET" } else { "NEBIUS_API_KEY=MISSING" }
+
+# run API
+python -m uvicorn src.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second PowerShell terminal, smoke test with non-interactive parsing:
+
+```powershell
+$payload = @{ github_url = 'https://github.com/psf/requests' } | ConvertTo-Json
+Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/summarize' -Method Post -ContentType 'application/json' -Body $payload
+```
+
+Expected: HTTP 200 with JSON keys `summary`, `technologies`, `structure`.
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -61,14 +93,6 @@ Response:
   "technologies": ["Python", "urllib3", "certifi", "chardet"],
   "structure": "The main source lives in src/requests/. Tests are in tests/. Documentation is in docs/ with its own requirements file."
 }
-```
-
-To bypass the cache (force a fresh LLM call):
-
-```bash
-curl -X POST "http://localhost:8000/summarize?bypass_cache=true" \
-  -H "Content-Type: application/json" \
-  -d '{"github_url": "https://github.com/psf/requests"}'
 ```
 
 ## For examiners
@@ -107,13 +131,9 @@ If the assembled context exceeds **50,000 tokens** (≈ 200,000 characters), the
 1. **Map:** each selected file is sent individually to Llama 3.1 8B, which extracts `{purpose, technologies, structure}` notes. All map calls run concurrently.
 2. **Reduce:** DeepSeek V3 merges all map notes into the final three-key response.
 
-### Caching
-
-Summaries are cached in SQLite keyed by `(owner/repo, commit SHA)`. A cache hit returns in milliseconds at zero LLM cost. The cache is automatically invalidated when new commits are pushed (new SHA = cache miss).
-
 ### What would be added in production
 
-- Redis instead of SQLite (distributed cache, supports horizontal scaling)
+- Request/response caching layer (for repeated repositories under high load)
 - Auth middleware (API keys for the `/summarize` endpoint)
 - Structured JSON logging with trace IDs to a log aggregator
 - Rate limiting per IP

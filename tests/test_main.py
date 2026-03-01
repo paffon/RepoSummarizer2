@@ -1,6 +1,6 @@
 """Tests for the FastAPI /summarize endpoint in src/main.py."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from asgi_lifespan import LifespanManager
@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from src.main import _build_degraded_response, _parse_llm_json
 from src.models import SummarizeResponse
-from src.repo.github_api import EmptyRepo, InvalidGitHubURL, RateLimited, RepoNotFound
+from src.repo.github_api import EmptyRepo, RateLimited, RepoNotFound
 
 
 # ---------------------------------------------------------------------------
@@ -37,25 +37,18 @@ _VALID_RESPONSE = SummarizeResponse(
     structure="Flat layout.",
 )
 
-_VALID_BODY = _VALID_RESPONSE.model_dump()
-
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 async def http_client():
-    """FastAPI test client with cache I/O patched out."""
-    with (
-        patch("src.cache.init_cache", new_callable=AsyncMock),
-        patch("src.cache.close_cache", new_callable=AsyncMock),
-    ):
-        from src.main import app
-        async with LifespanManager(app):
-            transport = ASGITransport(app=app)
-            async with AsyncClient(transport=transport, base_url="http://test") as client:
-                yield client
+    """FastAPI test client."""
+    from src.main import app
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +132,6 @@ class TestSummarizeErrors:
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),
             patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=None),
         ):
             instance = MockGH.return_value.__aenter__.return_value
             instance.fetch_metadata = AsyncMock(side_effect=RepoNotFound())
@@ -165,7 +157,6 @@ class TestSummarizeErrors:
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),
             patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=None),
         ):
             instance = MockGH.return_value.__aenter__.return_value
             instance.fetch_metadata = AsyncMock(return_value=_metadata())
@@ -179,49 +170,6 @@ class TestSummarizeErrors:
 
 
 # ---------------------------------------------------------------------------
-# POST /summarize — cache hit
-# ---------------------------------------------------------------------------
-
-class TestSummarizeCacheHit:
-    async def test_cache_hit_returns_cached_data(self, http_client):
-        cached = _VALID_BODY.copy()
-        with (
-            patch("src.main.parse_github_url", return_value=("owner", "repo")),
-            patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=cached),
-        ):
-            instance = MockGH.return_value.__aenter__.return_value
-            instance.fetch_metadata = AsyncMock(return_value=_metadata())
-            resp = await http_client.post(
-                "/summarize", json={"github_url": "https://github.com/owner/repo"}
-            )
-        assert resp.status_code == 200
-        assert resp.json()["summary"] == "Does stuff."
-
-    async def test_bypass_cache_skips_cache_lookup(self, http_client):
-        with (
-            patch("src.main.parse_github_url", return_value=("owner", "repo")),
-            patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=_VALID_BODY) as mock_get,
-            patch("src.cache.set_cached", new_callable=AsyncMock),
-            patch("src.main._single_pass", new_callable=AsyncMock, return_value=_VALID_RESPONSE),
-        ):
-            instance = MockGH.return_value.__aenter__.return_value
-            instance.fetch_metadata = AsyncMock(return_value=_metadata())
-            instance.fetch_tree = AsyncMock(return_value=[
-                {"path": "README.md", "type": "blob", "size": 100}
-            ])
-            instance.fetch_files_parallel = AsyncMock(return_value={"README.md": "hello"})
-            resp = await http_client.post(
-                "/summarize",
-                json={"github_url": "https://github.com/owner/repo"},
-                params={"bypass_cache": "true"},
-            )
-        mock_get.assert_not_called()
-        assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
 # POST /summarize — single-pass LLM path
 # ---------------------------------------------------------------------------
 
@@ -230,8 +178,6 @@ class TestSummarizeSinglePass:
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),
             patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=None),
-            patch("src.cache.set_cached", new_callable=AsyncMock),
             patch("src.main._single_pass", new_callable=AsyncMock, return_value=_VALID_RESPONSE),
         ):
             instance = MockGH.return_value.__aenter__.return_value
@@ -248,35 +194,18 @@ class TestSummarizeSinglePass:
         assert body["summary"] == "Does stuff."
         assert "Python" in body["technologies"]
 
-    async def test_result_written_to_cache(self, http_client):
-        with (
-            patch("src.main.parse_github_url", return_value=("owner", "repo")),
-            patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=None),
-            patch("src.cache.set_cached", new_callable=AsyncMock) as mock_set,
-            patch("src.main._single_pass", new_callable=AsyncMock, return_value=_VALID_RESPONSE),
-        ):
-            instance = MockGH.return_value.__aenter__.return_value
-            instance.fetch_metadata = AsyncMock(return_value=_metadata(sha="sha999"))
-            instance.fetch_tree = AsyncMock(return_value=[
-                {"path": "README.md", "type": "blob", "size": 100}
-            ])
-            instance.fetch_files_parallel = AsyncMock(return_value={"README.md": "hello"})
-            await http_client.post(
-                "/summarize", json={"github_url": "https://github.com/owner/repo"}
-            )
-        mock_set.assert_called_once()
-        args = mock_set.call_args.args
-        assert args[1] == "sha999"
-
     async def test_request_id_header_present(self, http_client):
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),
             patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=_VALID_BODY),
+            patch("src.main._single_pass", new_callable=AsyncMock, return_value=_VALID_RESPONSE),
         ):
             instance = MockGH.return_value.__aenter__.return_value
             instance.fetch_metadata = AsyncMock(return_value=_metadata())
+            instance.fetch_tree = AsyncMock(return_value=[
+                {"path": "README.md", "type": "blob", "size": 100}
+            ])
+            instance.fetch_files_parallel = AsyncMock(return_value={"README.md": "hello"})
             resp = await http_client.post(
                 "/summarize", json={"github_url": "https://github.com/owner/repo"}
             )
@@ -294,7 +223,6 @@ class TestSummarizeLlmError:
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),
             patch("src.main.GitHubClient") as MockGH,
-            patch("src.cache.get_cached", new_callable=AsyncMock, return_value=None),
             patch("src.main._single_pass", new_callable=AsyncMock, side_effect=LLMError("bad")),
         ):
             instance = MockGH.return_value.__aenter__.return_value

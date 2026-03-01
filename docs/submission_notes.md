@@ -12,10 +12,10 @@ This repository implements the Nebius Academy assignment: a FastAPI service that
 
 ## Design choices that improve robustness
 
-- **Cache by commit SHA**: avoids stale summaries for moving default branches and cuts repeated LLM cost.
 - **Graceful degradation**: if JSON repair still fails, returns metadata-based summary instead of crashing.
 - **Parallel I/O**: selected files are fetched concurrently, reducing wall-clock latency.
 - **Prompt centralization**: all model prompt content lives in a single module for easy tuning and auditability.
+- **Submission-safe runtime path**: request handling is deliberately straightforward (no persistent cache dependency) to minimize setup surprises.
 
 ## How constraints are handled
 
@@ -33,7 +33,7 @@ This repository implements the Nebius Academy assignment: a FastAPI service that
 
 ## Test coverage
 
-- Unit and API tests validate filtering, URL parsing, model client behavior, caching, error mappings, and endpoint contract.
+- Unit and API tests validate filtering, URL parsing, model client behavior, error mappings, and endpoint contract.
 - Live Nebius tests are present and automatically skipped when no real API key is configured.
 
 ## Additional doc
