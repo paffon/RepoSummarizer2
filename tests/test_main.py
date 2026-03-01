@@ -128,6 +128,13 @@ class TestSummarizeErrors:
         resp = await http_client.post("/summarize", json={"github_url": "not-a-url"})
         assert resp.status_code == 422
 
+    async def test_missing_required_field_returns_error_shape(self, http_client):
+        resp = await http_client.post("/summarize", json={})
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["status"] == "error"
+        assert "message" in body
+
     async def test_repo_not_found_returns_404(self, http_client):
         with (
             patch("src.main.parse_github_url", return_value=("owner", "repo")),

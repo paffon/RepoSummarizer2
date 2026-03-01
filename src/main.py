@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from src import config, cache
@@ -119,6 +120,17 @@ async def handle_llm_error(request: Request, exc: LLMError):
 @app.exception_handler(asyncio.TimeoutError)
 async def handle_timeout(request: Request, exc: asyncio.TimeoutError):
     return _error(504, "Request timed out.")
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(request: Request, exc: RequestValidationError):
+    return _error(422, "Invalid request payload.")
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    logger.exception("Unhandled error")
+    return _error(500, "Internal server error.")
 
 
 # ---------------------------------------------------------------------------

@@ -22,9 +22,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 4. Set required environment variables
-#    At minimum, export NEBIUS_API_KEY in your shell.
+#    At minimum, set NEBIUS_API_KEY in your shell.
 #    GITHUB_TOKEN is optional but recommended (raises rate limit from 60 to 5000 req/hour).
-export NEBIUS_API_KEY=your_nebius_key_here
+# Windows PowerShell:
+$env:NEBIUS_API_KEY="your_nebius_key_here"
+# $env:GITHUB_TOKEN="your_github_pat_here"
+
+# macOS / Linux:
+# export NEBIUS_API_KEY=your_nebius_key_here
 # export GITHUB_TOKEN=your_github_pat_here
 
 # 5. Start the server
